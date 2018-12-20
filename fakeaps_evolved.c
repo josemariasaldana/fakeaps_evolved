@@ -1,34 +1,32 @@
 /**
-Fake Access Points using Atheros wireless cards in Linux
-Written by Evan Jones <ejones@uwaterloo.ca>
+Fake Access Points (Evolved) using Atheros wireless cards in Linux
 
-Released under a BSD Licence
+How to Compile:
 
-How to Use:
+- Get the `ieee80211.h` and `ieee80211_radiotap.h` headers from e.g. the MadWiFi distribution:
+
+http://cvs.sourceforge.net/viewcvs.py/madwifi/madwifi/net80211/
+
+$ gcc --std=gnu99 -Wall -o fakeaps_evolved fakeaps_evolved.c
+
+Start the program
+
+$ ./fakeaps_evolved [atheros raw device] [channel it is tuned to] [802.11 version: 'g' or 'n']
+
+
+Before using it:
 1. Customize the array of access points below, if you want.
 2. Bring up your Atheros interface on the desired channel.
 3. Enable the raw device (echo "1" > /proc/sys/dev/ath0/rawdev)
 4. Configure the raw device to use radiotap headers (echo "2" > /proc/sys/dev/ath0/rawdev_type)
 5. Bring up the raw device (ifconfig ath0raw up)
-6. Start this program (./fakeaps ath0raw [channel number for ath0])
-
-How to Compile:
-1. Get the "ieee80211.h" and "ieee80211_radiotap.h" headers from the MadWiFi
-distribution:
-
-http://cvs.sourceforge.net/viewcvs.py/madwifi/madwifi/net80211/
-
-2. gcc --std=gnu99 -Wall -o fakeaps fakeaps.c
 
 
-Thanks go out to John Bicket for his help in getting the raw device to work
-correctly, and getting it included in the MadWiFi driver.
+Improved by Jose Ruiz, Cristian Hernandez and Jose Saldana, from University of Zaragoza.
 
-http://pdos.csail.mit.edu/~jbicket/
+Initial version written by Evan Jones: http://www.evanjones.ca/software/fakeaps.c
 
-Thanks also to Sebastian Weitzel for his athrawsend program:
-
-http://www.togg.de/stuff/athrawsend.c
+Released under a BSD Licence
 */
 
 #include <sys/types.h>
@@ -55,7 +53,7 @@ http://www.togg.de/stuff/athrawsend.c
 #include <time.h>
 
 // Comentar en máquinas minipcs
-//#include <linux/byteorder/big_endian.h>
+#include <linux/byteorder/big_endian.h>
 
 
 #define __packed __attribute__((__packed__))
@@ -293,8 +291,15 @@ size_t    lon_paquete_wifi_beacon = 59;*/
 #define BEACON_INTERVAL 102400
 
 /** Returns a beacon packet for the specified descriptor. The packet will be allocated using malloc. */
-uint8_t* constructBeaconPacket( uint8_t dataRate, uint8_t channel, const struct AccessPointDescriptor* apDescription, size_t* beaconLength )
+uint8_t* constructBeaconPacket( uint8_t dataRate, uint8_t channel, const struct AccessPointDescriptor* apDescription, size_t* beaconLength, char version )
 {
+	struct {
+		uint8_t known;		/* The known field indicates which
+					 * information is known               */
+		uint8_t flags;
+		uint8_t mcs;			/* The mcs field indicates the MCS rate
+					 * index as in IEEE_802.11n-2009      */
+	} mcs;
 	
 	// Validate parameters
 	assert( apDescription != NULL );
@@ -309,12 +314,23 @@ uint8_t* constructBeaconPacket( uint8_t dataRate, uint8_t channel, const struct 
 	assert( dataRateValue == 0x02 || dataRateValue == 0x04 || dataRateValue == 0x12 ); 
 	
 	// Packet size: radiotap header + 1 byte for rate + ieee80211_frame header + beacon info + tags
-	*beaconLength = sizeof(struct ieee80211_radiotap_header) + sizeof(dataRate) +
-		sizeof(struct ieee80211_frame) + sizeof(struct ieee80211_beacon) +
-	// SSID, rates, channel
-		sizeof(struct ieee80211_info_element)*3 + apDescription->ssidLength +
-		apDescription->dataRatesLength + sizeof(channel);
-	
+	if (version == 'g')
+		*beaconLength = sizeof(struct ieee80211_radiotap_header) + sizeof(dataRate) +
+			sizeof(struct ieee80211_frame) + sizeof(struct ieee80211_beacon) +
+			//SSID, rates, channel
+			sizeof(struct ieee80211_info_element)*3 + apDescription->ssidLength +
+			apDescription->dataRatesLength + sizeof(channel);
+
+	else if (version == 'n')
+		*beaconLength = sizeof(struct ieee80211_radiotap_header) + sizeof (mcs) +
+			sizeof(struct ieee80211_frame) + sizeof(struct ieee80211_beacon) +
+			//SSID, rates, channel
+			sizeof(struct ieee80211_info_element)*3 + apDescription->ssidLength +
+			apDescription->dataRatesLength + sizeof(channel);
+
+	else
+		return NULL;
+
 	uint8_t* packet = (uint8_t*) malloc( *beaconLength );
 	assert( packet != NULL );
 	if ( packet == NULL )
@@ -331,16 +347,46 @@ uint8_t* constructBeaconPacket( uint8_t dataRate, uint8_t channel, const struct 
 	remainingBytes -= sizeof(*radiotap);
 	
 	radiotap->it_version = 0;
-	//radiotap->it_len = __cpu_to_le16(sizeof(*radiotap) + sizeof(dataRate));
-	radiotap->it_len = sizeof(*radiotap) + sizeof(dataRate);
-	radiotap->it_present = (1 << IEEE80211_RADIOTAP_RATE);
-	
-	// Add the data rate for the radiotap header
-	assert( remainingBytes >= sizeof(dataRate) );
-	*packetIterator = (dataRate & IEEE80211_RATE_VAL);
-	packetIterator ++;
-	remainingBytes -= sizeof(dataRate);
-	
+
+	if (version == 'g') {
+		//radiotap->it_len = __cpu_to_le16(sizeof(*radiotap) + sizeof(dataRate));
+		radiotap->it_len = sizeof(*radiotap) + sizeof(dataRate);
+		radiotap->it_present = (1 << IEEE80211_RADIOTAP_RATE);
+
+		// Add the data rate for the radiotap header
+		assert( remainingBytes >= sizeof(dataRate) );
+		*packetIterator = (dataRate & IEEE80211_RATE_VAL);
+		packetIterator ++;
+		remainingBytes -= sizeof(dataRate);
+	}
+
+	else if (version == 'n') {
+		//radiotap->it_len = __cpu_to_le16(sizeof(*radiotap) + sizeof(mcs)); //FIXME comment in minipcs
+		radiotap->it_len = sizeof(*radiotap) + sizeof(mcs);
+
+		//radiotap->it_present = __cpu_to_le32((1 << IEEE80211_RADIOTAP_MCS)); //FIXMEcomment in minipcs
+		radiotap->it_present = (1 << IEEE80211_RADIOTAP_MCS);
+
+		assert( remainingBytes >= sizeof(mcs) );
+		mcs.mcs = 0;
+		mcs.flags = IEEE80211_RADIOTAP_MCS_BW_20
+							| IEEE80211_RADIOTAP_MCS_SGI;
+		mcs.known = IEEE80211_RADIOTAP_MCS_HAVE_MCS
+							| IEEE80211_RADIOTAP_MCS_HAVE_BW
+							| IEEE80211_RADIOTAP_MCS_HAVE_GI;
+		*packetIterator = mcs.known;
+		packetIterator ++;
+		*packetIterator = mcs.flags;
+		packetIterator ++;
+		*packetIterator = mcs.mcs;
+		packetIterator ++;
+		remainingBytes -= sizeof(mcs);
+	}
+
+	else { // version different from 'g' or 'n'
+		return NULL;
+	}
+
 	// Build the 802.11 header
 	assert( remainingBytes >= sizeof(struct ieee80211_frame) );
 	struct ieee80211_frame* dot80211 = (struct ieee80211_frame*) packetIterator;
@@ -409,7 +455,9 @@ uint8_t* constructBeaconPacket( uint8_t dataRate, uint8_t channel, const struct 
 	return packet;
 }
 
-void transmitProbeResponse( int rawSocket, uint8_t* beaconPacket, size_t beaconLength, const uint8_t* destinationMAC )
+
+// FIXME: add an 802.11n version of the probe response
+void transmitProbeResponse( int rawSocket, uint8_t* beaconPacket, size_t beaconLength, const uint8_t* destinationMAC/*, char version*/ )
 {
 	// Probe responses are identical to beacon packets, except that
 	// they are directed and not broadcast, and they are
@@ -481,14 +529,14 @@ static const size_t BEACON_TIMESTAMP_OFFSET = sizeof( struct ieee80211_frame );
 
 void help()
 {
-	printf( "fakeaps [atheros raw device] [channel it is tuned to]\n" );
+	printf( "$ ./fakeaps_evolved [atheros raw device] [channel it is tuned to] [802.11 version: 'g' or 'n']\n" );
 }
 
 
 int main(int argc, char *argv[])
 {
 	size_t i;
-	if ( argc != 3 )
+	if ( argc != 4 )
 	{
 		help();
 		return 1;
@@ -502,19 +550,38 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	
+	// version of 802.11 used
+	char version = argv[3][0];
+
+	printf("%c\n", version );
+
+	if (strlen(argv[3]) != 1) {
+		printf( "The version must be 'g' or 'n'.\n" );
+		help();
+		return 1;	
+	}
+
+	if ( (version != 'g') && (version != 'n') ) {
+		printf( "The version must be 'g' or 'n'.\n" );
+		help();
+		return 1;
+	}
+
 	// The 802.11b base broadcast rate
 	const uint8_t dataRate = 0x4;
 	const char* device = argv[1];
+
 		
 	// Construct the beacon packets
 	size_t* beaconLengths = (size_t*) malloc( sizeof(size_t) * numAccessPoints );
 	assert( beaconLengths != NULL );
 	uint8_t** beaconPackets = (uint8_t**) malloc( sizeof(uint8_t*) * numAccessPoints );
 	assert( beaconLengths != NULL );
-	
+
+	assert( (version == 'g') || (version == 'n') );
 	for ( i = 0; i < numAccessPoints; ++ i )
 	{
-		beaconPackets[i] = constructBeaconPacket( dataRate, channel, accessPoints[i], &beaconLengths[i] );
+		beaconPackets[i] = constructBeaconPacket( dataRate, channel, accessPoints[i], &beaconLengths[i], version );			
 		assert( beaconPackets[i] != NULL );
 		assert( beaconLengths[i] > 0 );
 	}
