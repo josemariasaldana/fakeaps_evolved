@@ -21,6 +21,11 @@ Start the program
 ```
 $ ./fakeaps_evolved [atheros raw device] [channel it is tuned to] [802.11 version: 'g' or 'n']
 ```
+Example:
+```
+$ ./fakeaps_evolved wlan0 11 n
+```
+
 
 Version with manual definition of the frames
 --------------------------------------------
@@ -29,7 +34,10 @@ The program 'fakeaps_evolved_with_manual_definition.c' has more options: it can 
 ```
 ./fakeaps_evolved [atheros raw device] [channel it is tuned to] [802.11 version: 'g' (11g), 'n' (11n), 'v' (11ac), 'a' (send AMPDUs)] [mode: 'p' (program-built frame. Only for 11g and 11n), 'u' (user-defined frame)]
 ```
-
+Example:
+```
+$ ./fakeaps_evolved_with_manual_definition wlp1s0 9 n p
+```
 
 Before using it:
 1. Customize the array of access points below, if you want.
