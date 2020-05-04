@@ -11,6 +11,10 @@ Compile:
 ```
 $ gcc --std=gnu99 -Wall -o fakeaps_evolved fakeaps_evolved.c
 ```
+or
+```
+gcc --std=gnu99 -Wall -o fakeaps_evolved_with_manual_definition fakeaps_evolved_with_manual_definition.c
+```
 
 Start the program
 
